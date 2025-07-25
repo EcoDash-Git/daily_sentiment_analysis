@@ -22,7 +22,7 @@ invisible(lapply(required, \(p) {
 %||% <- function(a, b) if (nzchar(a)) a else b
 
 ## ── 1.  Configuration & env vars ───────────────────────────────────────────
-REPORT_DATE      <- Sys.getenv("REPORT_DATE") %>% as.Date() %||% Sys.Date()
+REPORT_DATE      <- (Sys.getenv("REPORT_DATE") %>% as.Date()) %||% Sys.Date()
 RMD_FILE         <- "daily_sentiment_report.Rmd"      # adjust if you saved elsewhere
 HTML_OUT         <- "daily_sentiment_report.html"
 PDF_OUT          <- "daily_sentiment_report.pdf"
