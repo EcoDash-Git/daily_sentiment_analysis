@@ -91,11 +91,11 @@ stopifnot(resp_status(resp) < 300)
 cat("✔ Uploaded to Supabase:", object_path, "\n")
 
 ## 5 ── email via Mailjet -----------------------------------------------------
-## 5 ── email via Mailjet -----------------------------------------------------
+
 from_email <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
   str_remove_all(str_extract(MAIL_FROM, "<.+@.+>"), "[<>]")
 } else {
-  MAIL_FROM
+  str_trim(MAIL_FROM)                       # ← trim any stray whitespace
 }
 
 from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
@@ -104,12 +104,18 @@ from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
   "Sentiment Bot"
 }
 
+# NEW ── split on comma / semicolon and drop empty elements / whitespace
+to_emails <- str_split(MAIL_TO, "[,;]")[[1]] |>
+             str_trim() |>
+             discard(~ !nzchar(.x)) |>
+             lapply(\(x) list(Email = x))
+
 mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
   req_auth_basic(MJ_API_KEY, MJ_API_SECRET) |>
   req_body_json(list(
     Messages = list(list(
       From        = list(Email = from_email, Name = from_name),
-      To          = list(list(Email = MAIL_TO)),
+      To          = to_emails,             # ← was: list(list(Email = MAIL_TO))
       Subject     = sprintf("Daily Sentiment Report – %s", REPORT_DATE),
       TextPart    = "Attached you'll find the daily sentiment report.",
       Attachments = list(list(
@@ -119,7 +125,7 @@ mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
       ))
     ))
   )) |>
-  req_error(is_error = \(x) FALSE) |>   # ← NEW: never stop on HTTP ≥400
+  req_error(is_error = \(x) FALSE) |>
   req_perform()
 
 if (resp_status(mj_resp) >= 300) {
@@ -129,3 +135,4 @@ if (resp_status(mj_resp) >= 300) {
 }
 
 cat("📧  Mailjet response OK — report emailed\n")
+
