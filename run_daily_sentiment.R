@@ -91,13 +91,18 @@ stopifnot(resp_status(resp) < 300)
 cat("✔ Uploaded to Supabase:", object_path, "\n")
 
 ## 5 ── email via Mailjet -----------------------------------------------------
-from_email <- if (str_detect(MAIL_FROM, "<.+@.+>"))
-                str_remove_all(str_extract(MAIL_FROM, "<.+@.+>"), "[<>]")
-              else MAIL_FROM          # ← put ‘else’ on SAME line
+from_email <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
+  str_remove_all(str_extract(MAIL_FROM, "<.+@.+>"), "[<>]")
+} else {
+  MAIL_FROM
+}
 
-from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>"))
-                str_trim(str_remove(MAIL_FROM, "<.+@.+>$"))
-              else "Sentiment Bot"    # ← idem
+from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
+  str_trim(str_remove(MAIL_FROM, "<.+@.+>$"))
+} else {
+  "Sentiment Bot"
+}
+
 
 
 mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
