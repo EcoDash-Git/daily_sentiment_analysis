@@ -3,8 +3,7 @@ title: "Twitter Daily Analysis – `r params$report_date`"
 author: ""
 date: "`r Sys.Date()`"
 params:
-  # Change this if you want to run the report for a different day
-  report_date: !r Sys.Date()          # e.g. as.Date("2025-07-23")
+  report_date: !r Sys.Date()   # change for back‑reporting
 output:
   html_document:
     toc: true
@@ -15,27 +14,48 @@ output:
     toc: true
 ---
 
-```{r, echo = FALSE,warning = FALSE,message = FALSE}
+```{r setup, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 
-knitr::opts_chunk$set(
-  echo = FALSE,   # hide code
-  warning = FALSE,
-  message = FALSE
-)
-
-
-# ── Packages ────────────────────────────────────────────────────────────────
+# ── Packages ──────────────────────────────────────────────────────────────
 required <- c(
-  "tidyverse", "lubridate", "tidytext", "stringi", "knitr", "kableExtra",
-  "forcats", "widyr", "data.table", "sentimentr",
+  "tidyverse", "lubridate", "tidytext", "stringi",
+  "knitr", "kableExtra", "sentimentr",
   "DBI", "RPostgres"
 )
-invisible(lapply(required, \(pkg) {
-  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, quiet = TRUE)
-  library(pkg, character.only = TRUE)
+invisible(lapply(required, \(p){
+  if (!requireNamespace(p, quietly = TRUE)) install.packages(p, quiet = TRUE)
+  library(p, character.only = TRUE)
 }))
 
-# ── Supabase credentials ────────────────────────────────────────────────────
+safe_kable <- function(tbl, digits = 1, caption = NULL){
+  if (nrow(tbl) == 0){
+    knitr::kable(data.frame(Note = "No data for the selected day"),
+                 align = "c", caption = caption)
+  } else {
+    tbl |>
+      kbl(digits = digits, align = "c", caption = caption) |>
+      kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed"),
+        full_width = FALSE, position = "center"
+      ) |>
+      row_spec(0, bold = TRUE, color = "white", background = "#000")
+  }
+}
+```
+
+
+
+```{r, echo = FALSE,warning = FALSE,message = FALSE}
+
+# ── global guard ──────────────────────────────────────────────
+if (nrow(df_day) == 0){
+  cat("\n\n### No tweets for", format(report_day, "%Y‑%m‑%d"),  
+      "so no charts or tables to show.\n\n")
+  knitr::knit_exit()          # stop knitting (rest of doc will be skipped)
+}
+
+# --- Supabase creds (replace with secrets in production) ----
 Sys.setenv(
   SUPABASE_HOST = "aws-0-us-east-2.pooler.supabase.com",
   SUPABASE_PORT = "6543",
@@ -54,9 +74,6 @@ con <- DBI::dbConnect(
   sslmode  = "require"
 )
 
-```
-
-```{r}
 twitter_raw <- DBI::dbReadTable(con, "twitter_raw")
 
 main_ids <- tibble::tribble(
@@ -101,23 +118,29 @@ main_ids <- tibble::tribble(
   "ArweaveEco",         "892752981736779776"
 )
 
-tweets_tagged <- twitter_raw %>%
-  left_join(main_ids, by = "username") %>%
+tweets_tagged <- twitter_raw |>
+  left_join(main_ids, by = "username") |>
   mutate(
     is_rt_text = str_detect(text, "^RT @"),
     post_type = case_when(
-      is_rt_text                                   ~ "retweet",
+      is_rt_text                                      ~ "retweet",
       user_id == main_id & !is_rt_text &
-        str_detect(text, "https://t.co")           ~ "quote",
-      user_id == main_id                           ~ "original",
-      TRUE                                         ~ "other"
+        str_detect(text, "https://t.co")              ~ "quote",
+      user_id == main_id                              ~ "original",
+      TRUE                                            ~ "other"
     )
   )
 
+report_day <- as.Date(params$report_date)
 
+df_day <- tweets_tagged |>
+  mutate(
+    day     = as.Date(date),
+    hour    = lubridate::hour(date),
+    weekday = lubridate::wday(date, label = TRUE, abbr = FALSE, locale = "en_US")
+  ) |>
+  filter(day == report_day, post_type != "other")
 ```
-
-
 
 ```{r}
 
@@ -135,92 +158,86 @@ df_day <- tweets_tagged %>%
 
 # Summary Table
 ```{r}
-summary_table <- df_day %>%
+
+summary_table <- df_day |>
   summarise(
-    total_tweets      = n(),
-    avg_likes         = mean(like_count,  na.rm = TRUE),
-    avg_comments      = mean(reply_count, na.rm = TRUE),
-    avg_impressions   = mean(view_count,  na.rm = TRUE),
-    avg_engagement    = mean(engagement_rate, na.rm = TRUE)
+    total_tweets    = n(),
+    avg_likes       = mean(like_count,  na.rm = TRUE),
+    avg_comments    = mean(reply_count, na.rm = TRUE),
+    avg_impressions = mean(view_count,  na.rm = TRUE),
+    avg_engagement  = mean(engagement_rate, na.rm = TRUE)
   )
-
-summary_table %>%
-  kbl(digits = 1, align = "c") %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover", "condensed"),
-    full_width = FALSE, position = "center"
-  ) %>%
-  row_spec(0, bold = TRUE, color = "white", background = "#000")
-
+safe_kable(summary_table)
 
 ```
 
 # Top Keywords (`r params$report_date`)
 
 ```{r}
-custom_stopwords <- tibble(word = c("ao", "aothecomputer", "rt", "https", "t.co", "1"))
-all_stopwords    <- bind_rows(stop_words, custom_stopwords)
+custom_stop <- tibble(word = c("ao","aothecomputer","rt","https","t.co","1"))
+word_counts <- df_day |>
+  unnest_tokens(word, text) |>
+  anti_join(bind_rows(stop_words, custom_stop), by = "word") |>
+  count(word, sort = TRUE) |>
+  slice_head(n = 20)
 
-word_counts <- df_day %>%
-  select(text) %>%
-  unnest_tokens(word, text) %>%
-  anti_join(all_stopwords, by = "word") %>%
-  count(word, sort = TRUE) %>%
-  slice_max(n, n = 20)
-
-ggplot(word_counts, aes(reorder(word, n), n)) +
-  geom_col(fill = "steelblue") +
-  coord_flip() +
-  labs(title = "Top 20 Words", x = "Word", y = "Frequency") +
-  theme_minimal()
-
-
+if (nrow(word_counts) > 0){
+  ggplot(word_counts, aes(reorder(word, n), n)) +
+    geom_col(fill = "steelblue") +
+    coord_flip() +
+    labs(title = "Top 20 Words", x = "Word", y = "Frequency") +
+    theme_minimal()
+} else {
+  cat("*No tokens available for this day.*")
+}
 ```
 
 # TF-IDF by Post Type (`r params$report_date`)
 
 ```{r}
-word_tfidf <- df_day %>%
-  select(post_type, text) %>%
-  mutate(
-    text = str_remove_all(text, "http\\S+|@\\w+|[[:punct:]]"),
-    text = stri_replace_all_regex(text, "[\\p{Emoji_Presentation}\\p{Extended_Pictographic}]+", "")
-  ) %>%
-  unnest_tokens(word, text) %>%
-  filter(!str_detect(word, "^[0-9]+$"), word != "rt") %>%
-  anti_join(stop_words, by = "word") %>%
-  count(post_type, word, sort = TRUE) %>%
-  bind_tf_idf(word, post_type, n) %>%
-  group_by(post_type) %>%
-  slice_max(tf_idf, n = 10) %>%
+word_tfidf <- df_day |>
+  mutate(text = str_remove_all(text, "http\\S+|@\\w+|[[:punct:]]")) |>
+  unnest_tokens(word, text) |>
+  anti_join(stop_words, by = "word") |>
+  filter(!str_detect(word,"^[0-9]+$"), word != "rt") |>
+  count(post_type, word, sort = TRUE) |>
+  bind_tf_idf(word, post_type, n) |>
+  group_by(post_type) |>
+  slice_max(tf_idf, n = 10) |>
   ungroup()
 
-ggplot(word_tfidf,
-       aes(reorder_within(word, tf_idf, post_type), tf_idf, fill = post_type)) +
-  geom_col(show.legend = FALSE) +
-  facet_wrap(~post_type, scales = "free_y") +
-  scale_x_reordered() +
-  labs(title = "Distinctive Words by Post Type",
-       x = "Word", y = "TF‑IDF") +
-  coord_flip() +
-  theme_minimal()
-
+if (nrow(word_tfidf) > 0){
+  ggplot(word_tfidf,
+         aes(reorder_within(word, tf_idf, post_type), tf_idf, fill = post_type)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~post_type, scales = "free_y") +
+    scale_x_reordered() +
+    labs(title = "Distinctive Words by Post Type",
+         x = "Word", y = "TF‑IDF") +
+    coord_flip() +
+    theme_minimal()
+} else {
+  cat("*Insufficient tokens to compute TF‑IDF.*")
+}
 
 ```
 
 # Time-Based Analysis (`r params$report_date`)
 ```{r}
 
-hourly_distribution <- df_day %>%
-  count(hour) %>%
-  mutate(percentage = n / sum(n) * 100)
+hourly_dist <- df_day |>
+  count(hour) |>
+  mutate(perc = n/sum(n)*100)
 
-ggplot(hourly_distribution, aes(hour, percentage)) +
-  geom_col(fill = "darkorange") +
-  scale_x_continuous(breaks = 0:23) +
-  labs(title = "Tweet Activity by Hour",
-       x = "Hour of Day", y = "Percentage of Tweets") +
-  theme_minimal()
+if (nrow(hourly_dist) > 0){
+  ggplot(hourly_dist, aes(hour, perc)) +
+    geom_col(fill = "darkorange") +
+    scale_x_continuous(breaks = 0:23) +
+    labs(title = "Tweet Activity by Hour",
+         x = "Hour", y = "% of Tweets") +
+    theme_minimal()
+} else cat("*No hourly data.*")
+
 
 ```
 
@@ -230,16 +247,19 @@ ggplot(hourly_distribution, aes(hour, percentage)) +
 # Engagement Analysis
 
 ```{r}
-eng_by_hour <- df_day %>%
-  group_by(hour) %>%
-  summarise(mean_eng = mean(engagement_rate, na.rm = TRUE), .groups = "drop")
+eng_by_hour <- df_day |>
+  group_by(hour) |>
+  summarise(mean_eng = mean(engagement_rate, na.rm = TRUE), .groups="drop")
 
-ggplot(eng_by_hour, aes(hour, mean_eng)) +
-  geom_line(color = "steelblue", size = 1) +
-  geom_point(color = "darkblue", size = 2) +
-  labs(title = "Average Engagement by Hour",
-       x = "Hour of Day", y = "Engagement Rate") +
-  theme_minimal()
+if (nrow(eng_by_hour) > 0){
+  ggplot(eng_by_hour, aes(hour, mean_eng)) +
+    geom_line(color = "steelblue", size = 1) +
+    geom_point(color = "darkblue", size = 2) +
+    labs(title = "Average Engagement by Hour",
+         x = "Hour", y = "Engagement Rate") +
+    theme_minimal()
+} else cat("*No engagement data.*")
+
 
 ```
 
@@ -266,19 +286,24 @@ ggplot(eng_by_type, aes(post_type, avg_eng, fill = post_type)) +
 # Likes Analysis
 
 ```{r}
-metric_plot <- function(metric, ylab) {
-  df_day %>%
-    group_by(hour) %>%
-    summarise(avg_val = mean(.data[[metric]], na.rm = TRUE), .groups = "drop") %>%
-    ggplot(aes(hour, avg_val)) +
-    geom_line(color = "steelblue", size = 1) +
-    geom_point(color = "darkblue", size = 2) +
-    labs(title = paste("Average", ylab, "by Hour"),
-         x = "Hour of Day", y = ylab) +
-    theme_minimal()
+metric_plot <- function(metric, ylab){
+  df <- df_day |>
+    group_by(hour) |>
+    summarise(avg_val = mean(.data[[metric]], na.rm = TRUE), .groups="drop")
+  if (nrow(df)==0) {
+    cat(paste("*No", ylab, "data.*"))
+  } else {
+    ggplot(df, aes(hour, avg_val)) +
+      geom_line(color="steelblue", size=1) +
+      geom_point(color="darkblue", size=2) +
+      labs(title = paste("Average", ylab, "by Hour"),
+           x="Hour", y=ylab) +
+      theme_minimal()
+  }
 }
 
-metric_plot("like_count",   "Likes")
+metric_plot("like_count", "Likes")
+
 
 ```
 
@@ -346,24 +371,25 @@ ggplot(views_by_type, aes(post_type, avg_views, fill = post_type)) +
 # Hashtag performance
 
 ```{r}
-hashtags <- df_day %>%
-  mutate(tag = str_extract_all(text, "#\\w+")) %>%
-  unnest(tag) %>%
-  group_by(tag) %>%
+hashtags <- df_day |>
+  mutate(tag = str_extract_all(text, "#\\w+")) |>
+  unnest(tag) |>
+  group_by(tag) |>
   summarise(
-    avg_eng   = mean(engagement_rate, na.rm = TRUE),
-    uses      = n(), .groups = "drop"
-  ) %>%
-  filter(uses >= 3) %>%      # at least 3 uses today
-  arrange(desc(avg_eng)) %>%
-  slice_head(n = 10)
+    avg_eng = mean(engagement_rate, na.rm = TRUE),
+    uses    = n(), .groups="drop") |>
+  filter(uses >= 3) |>
+  arrange(desc(avg_eng)) |>
+  slice_head(n=10)
 
-ggplot(hashtags, aes(reorder(tag, avg_eng), avg_eng)) +
-  geom_col(fill = "purple") +
-  coord_flip() +
-  labs(title = "Top Hashtags by Engagement",
-       x = "Hashtag", y = "Avg Engagement Rate") +
-  theme_minimal()
+if (nrow(hashtags)>0){
+  ggplot(hashtags, aes(reorder(tag, avg_eng), avg_eng)) +
+    geom_col(fill = "purple") +
+    coord_flip() +
+    labs(title = "Top Hashtags by Engagement",
+         x="Hashtag", y="Avg Engagement Rate") +
+    theme_minimal()
+} else cat("*No hashtag meets frequency threshold.*")
 
 ```
 
