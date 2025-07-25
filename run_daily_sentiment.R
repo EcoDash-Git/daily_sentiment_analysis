@@ -91,6 +91,7 @@ stopifnot(resp_status(resp) < 300)
 cat("✔ Uploaded to Supabase:", object_path, "\n")
 
 ## 5 ── email via Mailjet -----------------------------------------------------
+## 5 ── email via Mailjet -----------------------------------------------------
 from_email <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
   str_remove_all(str_extract(MAIL_FROM, "<.+@.+>"), "[<>]")
 } else {
@@ -102,8 +103,6 @@ from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>")) {
 } else {
   "Sentiment Bot"
 }
-
-
 
 mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
   req_auth_basic(MJ_API_KEY, MJ_API_SECRET) |>
@@ -120,12 +119,13 @@ mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
       ))
     ))
   )) |>
+  req_error(is_error = \(x) FALSE) |>   # ← NEW: never stop on HTTP ≥400
   req_perform()
 
-if (resp_status(mj_resp) >= 300){
-  cat("Mailjet error body:\n",
+if (resp_status(mj_resp) >= 300) {
+  cat("Mailjet response (status", resp_status(mj_resp), "):\n",
       resp_body_string(mj_resp, encoding = "UTF-8"), "\n")
-  stop("❌ Mailjet returned status ", resp_status(mj_resp))
+  stop("❌ Mailjet returned HTTP ", resp_status(mj_resp))
 }
 
 cat("📧  Mailjet response OK — report emailed\n")
