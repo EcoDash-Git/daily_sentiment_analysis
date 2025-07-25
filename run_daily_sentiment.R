@@ -2,13 +2,13 @@
 # ---------------------------------------------------------------------------
 # run_daily_sentiment.R
 # ---------------------------------------------------------------------------
-# * Renders daily_sentiment_report.Rmd   → HTML
+# * Renders tweet_report_daily.Rmd → HTML
 # * Prints the HTML to PDF (pagedown + headless Chrome)
 # * Uploads the PDF to Supabase (bucket: daily‑sentiment/YYYYwWW/…)
 # * Emails the PDF via Mailjet
 # ---------------------------------------------------------------------------
 
-## ── 0.  Packages ───────────────────────────────────────────────────────────
+## ── 0. Packages ────────────────────────────────────────────────────────────
 required <- c(
   "tidyverse", "lubridate", "jsonlite", "httr2", "httr", "glue",
   "rmarkdown", "pagedown", "RPostgres", "DBI", "base64enc"
@@ -19,22 +19,24 @@ invisible(lapply(required, \(p) {
   library(p, character.only = TRUE)
 }))
 
-%||% <- function(a, b) if (nzchar(a)) a else b
+# infix “or‑else” helper
+"%||%" <- function(a, b) if (nzchar(a)) a else b
 
-## ── 1.  Configuration & env vars ───────────────────────────────────────────
-REPORT_DATE      <- (Sys.getenv("REPORT_DATE") %>% as.Date()) %||% Sys.Date()
-RMD_FILE         <- "daily_sentiment_report.Rmd"      # adjust if you saved elsewhere
-HTML_OUT         <- "daily_sentiment_report.html"
-PDF_OUT          <- "daily_sentiment_report.pdf"
+## ── 1. Configuration & env vars ────────────────────────────────────────────
+REPORT_DATE <- (Sys.getenv("REPORT_DATE") %>% as.Date()) %||% Sys.Date()
 
-SB_URL           <- Sys.getenv("SUPABASE_URL")
-SB_STORAGE_KEY   <- Sys.getenv("SUPABASE_SERVICE_ROLE")
-SB_BUCKET        <- "daily-sentiment"                 # <── new bucket
+RMD_FILE  <- "tweet_report_daily.Rmd"      # <- your RMarkdown filename
+HTML_OUT  <- "daily_sentiment_report.html"
+PDF_OUT   <- "daily_sentiment_report.pdf"
 
-MJ_API_KEY       <- Sys.getenv("MJ_API_KEY")
-MJ_API_SECRET    <- Sys.getenv("MJ_API_SECRET")
-MAIL_FROM        <- Sys.getenv("MAIL_FROM")
-MAIL_TO          <- Sys.getenv("MAIL_TO")
+SB_URL         <- Sys.getenv("SUPABASE_URL")
+SB_STORAGE_KEY <- Sys.getenv("SUPABASE_SERVICE_ROLE")
+SB_BUCKET      <- "daily-sentiment"        # bucket name
+
+MJ_API_KEY  <- Sys.getenv("MJ_API_KEY")
+MJ_API_SECRET <- Sys.getenv("MJ_API_SECRET")
+MAIL_FROM   <- Sys.getenv("MAIL_FROM")
+MAIL_TO     <- Sys.getenv("MAIL_TO")
 
 stopifnot(
   SB_URL != "", SB_STORAGE_KEY != "",
@@ -42,7 +44,7 @@ stopifnot(
   MAIL_FROM != "", MAIL_TO != ""
 )
 
-## ── 2.  Knit RMarkdown → HTML ──────────────────────────────────────────────
+## ── 2. Knit RMarkdown → HTML ───────────────────────────────────────────────
 rmarkdown::render(
   input        = RMD_FILE,
   output_file  = HTML_OUT,
@@ -50,7 +52,7 @@ rmarkdown::render(
   quiet        = TRUE
 )
 
-## ── 3.  HTML → PDF (pagedown) ──────────────────────────────────────────────
+## ── 3. HTML → PDF (pagedown) ───────────────────────────────────────────────
 chrome_path <- Sys.getenv("CHROME_BIN")
 if (!nzchar(chrome_path)) chrome_path <- pagedown::find_chrome()
 cat("Using Chrome at:", chrome_path, "\n")
@@ -65,7 +67,7 @@ pagedown::chrome_print(
 if (!file.exists(PDF_OUT))
   stop("❌ PDF not generated – ", PDF_OUT, " missing")
 
-## ── 4.  Upload PDF to Supabase storage ─────────────────────────────────────
+## ── 4. Upload PDF to Supabase storage ──────────────────────────────────────
 object_path <- sprintf(
   "%s/%s_%s.pdf",
   format(Sys.Date(), "%Yw%V"),            # folder: YYYYwWW
@@ -80,9 +82,9 @@ upload_url <- sprintf(
 resp <- request(upload_url) |>
   req_method("POST") |>
   req_headers(
-    Authorization = sprintf("Bearer %s", SB_STORAGE_KEY),
-    x-upsert     = "true",
-    Content-Type = "application/pdf"
+    Authorization  = sprintf("Bearer %s", SB_STORAGE_KEY),
+    "x-upsert"     = "true",
+    "Content-Type" = "application/pdf"
   ) |>
   req_body_file(PDF_OUT) |>
   req_error(is_error = \(x) FALSE) |>
@@ -91,7 +93,7 @@ resp <- request(upload_url) |>
 stopifnot(resp_status(resp) < 300)
 cat("✔ Uploaded to Supabase:", object_path, "\n")
 
-## ── 5.  Email the PDF via Mailjet ──────────────────────────────────────────
+## ── 5. Email the PDF via Mailjet ───────────────────────────────────────────
 from_email <- if (str_detect(MAIL_FROM, "<.+@.+>"))
   str_remove_all(str_extract(MAIL_FROM, "<.+@.+>"), "[<>]") else MAIL_FROM
 from_name  <- if (str_detect(MAIL_FROM, "<.+@.+>"))
@@ -117,3 +119,4 @@ mj_resp <- request("https://api.mailjet.com/v3.1/send") |>
 
 stopifnot(resp_status(mj_resp) < 300)
 cat("📧  Mailjet response OK — report emailed\n")
+
