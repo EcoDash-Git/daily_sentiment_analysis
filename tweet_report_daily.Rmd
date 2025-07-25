@@ -27,7 +27,7 @@ knitr::opts_chunk$set(
 # ── Packages ────────────────────────────────────────────────────────────────
 required <- c(
   "tidyverse", "lubridate", "tidytext", "stringi", "knitr", "kableExtra",
-  "forcats", "widyr", "ggraph", "igraph", "data.table", "sentimentr",
+  "forcats", "widyr", "data.table", "sentimentr",
   "DBI", "RPostgres"
 )
 invisible(lapply(required, \(pkg) {
