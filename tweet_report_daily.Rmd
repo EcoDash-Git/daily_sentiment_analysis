@@ -1,0 +1,637 @@
+---
+title: "Twitter Daily Analysis – `r params$report_date`"
+author: ""
+date: "`r Sys.Date()`"
+params:
+  # Change this if you want to run the report for a different day
+  report_date: !r Sys.Date()          # e.g. as.Date("2025-07-23")
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+---
+
+```{r, echo = FALSE,warning = FALSE,message = FALSE}
+
+knitr::opts_chunk$set(
+  echo = FALSE,   # hide code
+  warning = FALSE,
+  message = FALSE
+)
+
+
+# ── Packages ────────────────────────────────────────────────────────────────
+required <- c(
+  "tidyverse", "lubridate", "tidytext", "stringi", "knitr", "kableExtra",
+  "forcats", "widyr", "ggraph", "igraph", "data.table", "sentimentr",
+  "DBI", "RPostgres"
+)
+invisible(lapply(required, \(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, quiet = TRUE)
+  library(pkg, character.only = TRUE)
+}))
+
+# ── Supabase credentials ────────────────────────────────────────────────────
+Sys.setenv(
+  SUPABASE_HOST = "aws-0-us-east-2.pooler.supabase.com",
+  SUPABASE_PORT = "6543",
+  SUPABASE_DB   = "postgres",
+  SUPABASE_USER = "postgres.kubvrwnqmsmhwcuscvje",
+  SUPABASE_PWD  = "hfa-tgt8nkj1AVM9vqe"
+)
+
+con <- DBI::dbConnect(
+  RPostgres::Postgres(),
+  host     = Sys.getenv("SUPABASE_HOST"),
+  port     = as.integer(Sys.getenv("SUPABASE_PORT")),
+  dbname   = Sys.getenv("SUPABASE_DB"),
+  user     = Sys.getenv("SUPABASE_USER"),
+  password = Sys.getenv("SUPABASE_PWD"),
+  sslmode  = "require"
+)
+
+```
+
+```{r}
+twitter_raw <- DBI::dbReadTable(con, "twitter_raw")
+
+main_ids <- tibble::tribble(
+  ~username,            ~main_id,
+  "weave_db",           "1206153294680403968",
+  "OdyseeTeam",         "1280241715987660801",
+  "ardriveapp",         "1293193263579635712",
+  "redstone_defi",      "1294053547630362630",
+  "everpay_io",         "1334504432973848577",
+  "decentlandlabs",     "1352388512788656136",
+  "KYVENetwork",        "136377177683878784",
+  "onlyarweave",        "1393171138436534272",
+  "ar_io_network",      "1468980765211955205",
+  "Permaswap",          "1496714415231717380",
+  "communitylabs",      "1548502833401516032",
+  "usewander",          "1559946771115163651",
+  "apus_network",       "1569621659468054528",
+  "fwdresearch",        "1573616135651545088",
+  "perma_dao",          "1595075970309857280",
+  "Copus_io",           "1610731228130312194",
+  "basejumpxyz",        "1612781645588742145",
+  "AnyoneFDN",          "1626376419268784130",
+  "arweaveindia",       "1670147900033343489",
+  "useload",            "1734941279379759105",
+  "protocolland",       "1737805485326401536",
+  "aoTheComputer",      "1750584639385939968",
+  "ArweaveOasis",       "1750723327315030016",
+  "aox_xyz",            "1751903735318720512",
+  "astrousd",           "1761104764899606528",
+  "PerplexFi",          "1775862139980226560",
+  "autonomous_af",      "1777500373378322432",
+  "Liquid_Ops",         "1795772412396507136",
+  "ar_aostore",         "1797632049202794496",
+  "FusionFiPro",        "1865790600462921728",
+  "vela_ventures",      "1869466343000444928",
+  "beaconwallet",       "1879152602681585664",
+  "VentoSwap",          "1889714966321893376",
+  "permawebjournal",    "1901592191065300993",
+  "Botega_AF",          "1902521779161292800",
+  "samecwilliams",      "409642632",
+  "TateBerenbaum",      "801518825690824707",
+  "ArweaveEco",         "892752981736779776"
+)
+
+tweets_tagged <- twitter_raw %>%
+  left_join(main_ids, by = "username") %>%
+  mutate(
+    is_rt_text = str_detect(text, "^RT @"),
+    post_type = case_when(
+      is_rt_text                                   ~ "retweet",
+      user_id == main_id & !is_rt_text &
+        str_detect(text, "https://t.co")           ~ "quote",
+      user_id == main_id                           ~ "original",
+      TRUE                                         ~ "other"
+    )
+  )
+
+
+```
+
+
+
+```{r}
+
+report_day <- as.Date(params$report_date)
+
+df_day <- tweets_tagged %>%
+  mutate(
+    day      = as.Date(date),
+    hour     = lubridate::hour(date),
+    weekday  = lubridate::wday(date, label = TRUE, abbr = FALSE, locale = "en_US")
+  ) %>%
+  filter(day == report_day, post_type != "other")
+
+```
+
+# Summary Table
+```{r}
+summary_table <- df_day %>%
+  summarise(
+    total_tweets      = n(),
+    avg_likes         = mean(like_count,  na.rm = TRUE),
+    avg_comments      = mean(reply_count, na.rm = TRUE),
+    avg_impressions   = mean(view_count,  na.rm = TRUE),
+    avg_engagement    = mean(engagement_rate, na.rm = TRUE)
+  )
+
+summary_table %>%
+  kbl(digits = 1, align = "c") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE, position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#000")
+
+
+```
+
+# Top Keywords (`r params$report_date`)
+
+```{r}
+custom_stopwords <- tibble(word = c("ao", "aothecomputer", "rt", "https", "t.co", "1"))
+all_stopwords    <- bind_rows(stop_words, custom_stopwords)
+
+word_counts <- df_day %>%
+  select(text) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(all_stopwords, by = "word") %>%
+  count(word, sort = TRUE) %>%
+  slice_max(n, n = 20)
+
+ggplot(word_counts, aes(reorder(word, n), n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Words", x = "Word", y = "Frequency") +
+  theme_minimal()
+
+
+```
+
+# TF-IDF by Post Type (`r params$report_date`)
+
+```{r}
+word_tfidf <- df_day %>%
+  select(post_type, text) %>%
+  mutate(
+    text = str_remove_all(text, "http\\S+|@\\w+|[[:punct:]]"),
+    text = stri_replace_all_regex(text, "[\\p{Emoji_Presentation}\\p{Extended_Pictographic}]+", "")
+  ) %>%
+  unnest_tokens(word, text) %>%
+  filter(!str_detect(word, "^[0-9]+$"), word != "rt") %>%
+  anti_join(stop_words, by = "word") %>%
+  count(post_type, word, sort = TRUE) %>%
+  bind_tf_idf(word, post_type, n) %>%
+  group_by(post_type) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup()
+
+ggplot(word_tfidf,
+       aes(reorder_within(word, tf_idf, post_type), tf_idf, fill = post_type)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~post_type, scales = "free_y") +
+  scale_x_reordered() +
+  labs(title = "Distinctive Words by Post Type",
+       x = "Word", y = "TF‑IDF") +
+  coord_flip() +
+  theme_minimal()
+
+
+```
+
+# Time-Based Analysis (`r params$report_date`)
+```{r}
+
+hourly_distribution <- df_day %>%
+  count(hour) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+ggplot(hourly_distribution, aes(hour, percentage)) +
+  geom_col(fill = "darkorange") +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Tweet Activity by Hour",
+       x = "Hour of Day", y = "Percentage of Tweets") +
+  theme_minimal()
+
+```
+
+
+
+
+# Engagement Analysis
+
+```{r}
+eng_by_hour <- df_day %>%
+  group_by(hour) %>%
+  summarise(mean_eng = mean(engagement_rate, na.rm = TRUE), .groups = "drop")
+
+ggplot(eng_by_hour, aes(hour, mean_eng)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "darkblue", size = 2) +
+  labs(title = "Average Engagement by Hour",
+       x = "Hour of Day", y = "Engagement Rate") +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+eng_by_type <- df_day %>%
+  group_by(post_type) %>%
+  summarise(avg_eng = mean(engagement_rate, na.rm = TRUE), .groups = "drop")
+
+ggplot(eng_by_type, aes(post_type, avg_eng, fill = post_type)) +
+  geom_col() +
+  labs(title = "Average Engagement by Post Type",
+       x = "Post Type", y = "Engagement Rate") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+```
+
+
+
+
+# Likes Analysis
+
+```{r}
+metric_plot <- function(metric, ylab) {
+  df_day %>%
+    group_by(hour) %>%
+    summarise(avg_val = mean(.data[[metric]], na.rm = TRUE), .groups = "drop") %>%
+    ggplot(aes(hour, avg_val)) +
+    geom_line(color = "steelblue", size = 1) +
+    geom_point(color = "darkblue", size = 2) +
+    labs(title = paste("Average", ylab, "by Hour"),
+         x = "Hour of Day", y = ylab) +
+    theme_minimal()
+}
+
+metric_plot("like_count",   "Likes")
+
+```
+
+```{r}
+## ── 1  Average likes ────────────────────────────────────────────────────
+likes_by_type <- df_day %>%
+  group_by(post_type) %>%
+  summarise(avg_likes = mean(like_count, na.rm = TRUE), .groups = "drop")
+
+ggplot(likes_by_type, aes(post_type, avg_likes, fill = post_type)) +
+  geom_col() +
+  labs(title = "Average Likes by Post Type",
+       x = "Post Type", y = "Likes") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+
+# Comments Analysis
+
+```{r}
+metric_plot("reply_count",  "Comments")
+
+```
+
+```{r}
+## ── 2  Average comments ────────────────────────────────────────────────
+comments_by_type <- df_day %>%
+  group_by(post_type) %>%
+  summarise(avg_comments = mean(reply_count, na.rm = TRUE), .groups = "drop")
+
+ggplot(comments_by_type, aes(post_type, avg_comments, fill = post_type)) +
+  geom_col() +
+  labs(title = "Average Comments by Post Type",
+       x = "Post Type", y = "Comments") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+# Impressions Analysis
+
+```{r}
+metric_plot("view_count",   "Impressions")
+
+```
+
+
+```{r}
+## ── 3  Average impressions ─────────────────────────────────────────────
+views_by_type <- df_day %>%
+  group_by(post_type) %>%
+  summarise(avg_views = mean(view_count, na.rm = TRUE), .groups = "drop")
+
+ggplot(views_by_type, aes(post_type, avg_views, fill = post_type)) +
+  geom_col() +
+  labs(title = "Average Impressions by Post Type",
+       x = "Post Type", y = "Impressions") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+# Hashtag performance
+
+```{r}
+hashtags <- df_day %>%
+  mutate(tag = str_extract_all(text, "#\\w+")) %>%
+  unnest(tag) %>%
+  group_by(tag) %>%
+  summarise(
+    avg_eng   = mean(engagement_rate, na.rm = TRUE),
+    uses      = n(), .groups = "drop"
+  ) %>%
+  filter(uses >= 3) %>%      # at least 3 uses today
+  arrange(desc(avg_eng)) %>%
+  slice_head(n = 10)
+
+ggplot(hashtags, aes(reorder(tag, avg_eng), avg_eng)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(title = "Top Hashtags by Engagement",
+       x = "Hashtag", y = "Avg Engagement Rate") +
+  theme_minimal()
+
+```
+
+# Word correlations (engagement)
+
+```{r}
+tokens <- df_day %>%
+  select(tweet_id, text, engagement_rate) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(!str_detect(word, "^[0-9]+$"))
+
+word_counts <- tokens %>% count(word) %>% filter(n >= 4)
+tokens_filt <- tokens %>% semi_join(word_counts, by = "word")
+
+word_bin <- tokens_filt %>%
+  distinct(tweet_id, word) %>%
+  mutate(present = 1) %>%
+  pivot_wider(names_from = word, values_from = present, values_fill = 0)
+
+eng_words <- df_day %>%
+  select(tweet_id, engagement_rate) %>%
+  inner_join(word_bin, by = "tweet_id")
+
+correlations <- eng_words %>%
+  summarise(across(-c(tweet_id),
+                   ~ cor(.x, engagement_rate, use = "complete.obs"))) %>%
+  pivot_longer(-engagement_rate, names_to = "word", values_to = "cor") %>%
+  filter(!is.na(cor))
+
+```
+
+
+```{r}
+correlations %>%
+  slice_max(cor, n = 10) %>%
+  ggplot(aes(reorder(word, cor), cor)) +
+  geom_col(fill = "#00BFC4") +
+  coord_flip() +
+  labs(title = "Top 10 Words Positively Correlated with Engagement",
+       x = "Word", y = "Correlation") +
+  theme_minimal()
+
+```
+
+```{r}
+correlations %>%
+  slice_min(cor, n = 10) %>%
+  ggplot(aes(reorder(word, cor), cor)) +
+  geom_col(fill = "#F8766D") +
+  coord_flip() +
+  labs(title = "Top 10 Words Negatively Correlated with Engagement",
+       x = "Word", y = "Correlation") +
+  theme_minimal()
+
+```
+
+
+# Sentiment Analysis
+
+```{r}
+# ── Clean text ─────────────────────────────────────────────────────
+df_sent <- df_day %>%
+  mutate(clean_text = text %>%
+           str_replace_all("&amp;|&gt;|&lt;", " ") %>%
+           str_remove_all("http\\S+|@\\w+|[[:punct:]]") %>%
+           str_squish())
+
+# ── Average sentiment per tweet ───────────────────────────────────
+sentiment_key <- update_key(
+  lexicon::hash_sentiment_jockers_rinker,
+  x = data.frame(x = c("hot"), y = c(1))
+)
+
+tweet_sent <- sentiment_by(df_sent$clean_text, polarity_dt = sentiment_key)
+
+df_sent <- bind_cols(df_sent, tweet_sent) %>%
+  select(-element_id) %>%
+  mutate(sentiment_cat = case_when(
+    ave_sentiment >  0.05 ~ "positive",
+    ave_sentiment < -0.05 ~ "negative",
+    TRUE                  ~ "neutral"
+  ))
+
+
+```
+
+
+```{r}
+
+
+polarity_table <- df_sent %>%
+  summarise(
+    total_tweets  = n(),
+    avg_polarity  = mean(ave_sentiment, na.rm = TRUE),
+    median_pol    = median(ave_sentiment, na.rm = TRUE),
+    sd_polarity   = sd(ave_sentiment, na.rm = TRUE),
+    pct_positive  = mean(sentiment_cat == "positive") * 100,
+    pct_neutral   = mean(sentiment_cat == "neutral")  * 100,
+    pct_negative  = mean(sentiment_cat == "negative") * 100
+  )
+
+# Format & print like your main summary table
+polarity_table %>%
+  mutate(
+    across(c(avg_polarity, median_pol, sd_polarity), round, 3),
+    across(starts_with("pct_"), round, 1)
+  ) %>%
+  kbl(
+    align      = "c",
+    digits     = 3,
+    col.names  = c(
+      "Tweets", "Avg Polarity", "Median", "SD",
+      "% Positive", "% Neutral", "% Negative"
+    )
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width        = FALSE,
+    position          = "center"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#000000")
+
+```
+
+
+```{r}
+
+df_sent %>%                           # this already contains ave_sentiment
+  ggplot(aes(x = "", y = ave_sentiment)) +
+  geom_boxplot(fill = "#2C3E50",
+               color = "black",
+               width = 0.3,
+               outlier.shape = NA) +          # hide default outliers
+  geom_jitter(width = 0.08, height = 0,
+              alpha  = 0.4, size = 1.5,
+              color  = "steelblue") +         # show each tweet as a point
+  labs(
+    title = "Distribution of Tweet Polarity",
+    x = NULL,
+    y = "Average Sentiment (polarity)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title   = element_text(face = "bold", size = 16, hjust = 0.5),
+    axis.title.y = element_text(size = 12),
+    axis.text.x  = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  coord_flip()
+
+```
+
+
+```{r}
+df_sent %>%
+  count(sentiment_cat) %>%
+  mutate(prop = n / sum(n) * 100) %>%
+  ggplot(aes(sentiment_cat, prop, fill = sentiment_cat)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("negative"="tomato","neutral"="khaki","positive"="skyblue")) +
+  labs(title = "Sentiment Distribution",
+       x = "Sentiment", y = "% of Tweets") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+
+df_sent %>%
+  count(post_type, sentiment_cat) %>%
+  group_by(post_type) %>%
+  mutate(prop = n / sum(n) * 100) %>%
+  ggplot(aes(sentiment_cat, prop, fill = sentiment_cat)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~post_type) +
+  scale_fill_manual(values = c("negative"="tomato","neutral"="khaki","positive"="skyblue")) +
+  labs(title = "Sentiment by Post Type",
+       x = "Sentiment", y = "% of Tweets") +
+  theme_minimal()
+
+
+```
+
+
+```{r}
+# ── Emotion analysis (8 basic NRC emotions) ────────────────────────────────
+
+## 1Choose + clean NRC lexicon
+nrc_key <- lexicon::hash_nrc_emotions %>% 
+  dplyr::filter(
+    emotion %in% c("trust","anger","anticipation","fear",
+                   "sadness","surprise","disgust","joy")
+  ) %>%                       # keep the eight basic emotions
+  dplyr::filter(              # drop a few profanities / false‑positives
+    !token %in% c("damn","damned","dammit","goddamn","hell",
+                  "heck","fuck","fucked","fucks","shit","crazy",
+                  "insane","mindfuck","jail","curse","cursed")
+  )
+
+# ── 0  Add an explicit element_id so we can merge safely
+df_sent <- df_sent %>% 
+  mutate(element_id = row_number())      # 1 … N tweets
+
+# ── 1  Compute emotions per tweet (averaged across its sentences)
+emo_raw <- emotion_by(
+  df_sent$clean_text,            # same order as df_sent
+  emotion_dt = nrc_key
+) %>%
+  select(element_id, emotion_type, ave_emotion)
+
+# ── 2  Join + reshape  ────────────────────────────────────────────
+df_emo <- df_sent %>%
+  select(tweet_id, hour, element_id) %>%        # keep hour for heat‑map
+  left_join(emo_raw, by = "element_id") %>%     # safe merge
+  pivot_wider(
+    names_from  = emotion_type,
+    values_from = ave_emotion,
+    values_fill = 0
+  ) %>%
+  # Net‑out negated emotions then drop them
+  mutate(across(matches("_negated$"), \(x) replace_na(x, 0))) %>%
+  mutate(
+    anger        = anger        - anger_negated,
+    anticipation = anticipation - anticipation_negated,
+    disgust      = disgust      - disgust_negated,
+    fear         = fear         - fear_negated,
+    joy          = joy          - joy_negated,
+    sadness      = sadness      - sadness_negated,
+    surprise     = surprise     - surprise_negated,
+    trust        = trust        - trust_negated
+  ) %>%
+  select(tweet_id, hour, anger:trust)            # *_negated columns gone
+
+
+## 4  Overall distribution (bar‑chart)
+overall_emo <- df_emo %>%                                   # wide → long
+  pivot_longer(anger:trust,
+               names_to  = "emotion",
+               values_to = "score") %>%
+  filter(                                     # ← keep only genuine emotions
+    !str_ends(emotion, "_negated"),           # drop *_negated
+    score > 0                                 # and keep scores > 0
+  ) %>%
+  count(emotion) %>%
+  mutate(percent = n / sum(n) * 100)
+
+ggplot(overall_emo, aes(reorder(emotion, percent), percent, fill = emotion)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Overall Emotion Distribution",
+    x     = "Emotion", y = "% of Tweets"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
