@@ -48,12 +48,6 @@ safe_kable <- function(tbl, digits = 1, caption = NULL){
 
 ```{r, echo = FALSE,warning = FALSE,message = FALSE}
 
-# ── global guard ──────────────────────────────────────────────
-if (nrow(df_day) == 0){
-  cat("\n\n### No tweets for", format(report_day, "%Y‑%m‑%d"),  
-      "so no charts or tables to show.\n\n")
-  knitr::knit_exit()          # stop knitting (rest of doc will be skipped)
-}
 
 # --- Supabase creds (replace with secrets in production) ----
 Sys.setenv(
@@ -140,21 +134,14 @@ df_day <- tweets_tagged |>
     weekday = lubridate::wday(date, label = TRUE, abbr = FALSE, locale = "en_US")
   ) |>
   filter(day == report_day, post_type != "other")
+
+if (nrow(df_day) == 0){
+  cat("\n\n### No tweets for", format(report_day, "%Y‑%m‑%d"),
+      "– nothing to plot or summarise.\n\n")
+  knitr::knit_exit()
+}
 ```
 
-```{r}
-
-report_day <- as.Date(params$report_date)
-
-df_day <- tweets_tagged %>%
-  mutate(
-    day      = as.Date(date),
-    hour     = lubridate::hour(date),
-    weekday  = lubridate::wday(date, label = TRUE, abbr = FALSE, locale = "en_US")
-  ) %>%
-  filter(day == report_day, post_type != "other")
-
-```
 
 # Summary Table
 ```{r}
