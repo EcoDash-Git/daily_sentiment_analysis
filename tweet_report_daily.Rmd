@@ -125,21 +125,39 @@ tweets_tagged <- twitter_raw |>
     )
   )
 
-report_day <- as.Date(params$report_date)
+# ── 1  Define the rolling window ------------------------------------------
+window_end   <- lubridate::now(tzone = "UTC")       # adjust tz if needed
+window_start <- window_end - lubridate::dhours(24)
 
+# If you still want to anchor the window to a param value, replace the two
+# lines above with something like:
+#   window_end   <- as.POSIXct(params$report_end,   tz = "UTC")
+#   window_start <- window_end - lubridate::dhours(24)
+
+# ── 2  Filter tweets --------------------------------------------------------
 df_day <- tweets_tagged |>
   mutate(
-    day     = as.Date(date),
-    hour    = lubridate::hour(date),
-    weekday = lubridate::wday(date, label = TRUE, abbr = FALSE, locale = "en_US")
+    publish_dt = lubridate::ymd_hms(date, tz = "UTC"),   # ensure POSIXct
+    hour       = lubridate::hour(publish_dt),
+    weekday    = lubridate::wday(publish_dt,
+                                 label = TRUE, abbr = FALSE, locale = "en_US")
   ) |>
-  filter(day == report_day, post_type != "other")
+  filter(
+    publish_dt >= window_start,
+    publish_dt <= window_end,
+    post_type  != "other"
+  )
 
+# ── 3  Early‑exit guard -----------------------------------------------------
 if (nrow(df_day) == 0){
-  cat("\n\n### No tweets for", format(report_day, "%Y‑%m‑%d"),
-      "– nothing to plot or summarise.\n\n")
+  cat(
+    "\n\n### No tweets in the last 24 hours (",
+    format(window_start, "%Y‑%m‑%d %H:%M"), " → ",
+    format(window_end,   "%Y‑%m‑%d %H:%M"), ").\n\n"
+  )
   knitr::knit_exit()
 }
+
 ```
 
 
