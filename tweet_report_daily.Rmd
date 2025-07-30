@@ -653,8 +653,6 @@ ggplot(overall_emo, aes(reorder(emotion, percent), percent, fill = emotion)) +
   ) +
   theme_minimal()
 
-
-
 ```
 
 
